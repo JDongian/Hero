@@ -15,7 +15,7 @@ Usage
 -----
 
 I highly encourage the use of [virtual
-envioronments](https://virtualenv.pypa.io/en/stable/). However, user escalating
+environments](https://virtualenv.pypa.io/en/stable/). However, user escalating
 to `root` always works in a pinch.
 
 Install dependencies with: `pip install -r requirements.txt`
