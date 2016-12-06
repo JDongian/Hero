@@ -1,7 +1,7 @@
-<img src="eve.png" data-canonical-src="eve.png" width="200" />
-
 SpellingHero
 ============
+
+<img src="eve.png" data-canonical-src="eve.png" width="180" /> <img src="howto.png" data-canonical-src="howto.png" width="294" />
 
 The SpellingHero is just someone who wants to get started on open source
 contributions. What better way than by fixing spelling mistakes in
@@ -15,7 +15,7 @@ Usage
 -----
 
 I highly encourage the use of [virtual
-envioronments](https://virtualenv.pypa.io/en/stable/). However, user escalating
+environments](https://virtualenv.pypa.io/en/stable/). However, user escalating
 to `root` always works in a pinch.
 
 Install dependencies with: `pip install -r requirements.txt`
