@@ -1,85 +1,140 @@
-#!/home/joshua/venv/bin/python
-import pickle
-from github import Github
+import os
+import configparser
 from getpass import getpass
-from sys import argv
+from github import Github
+from git import Repo
 
-SAVE_FILE = "save.p"
 
-
-def search(targets):
-    target = targets.pop()
-    if target.id in traversed:
-        return
-    traversed.add(target.id)
-
-    if (not target.id in ids):
-        ids.add(target.id)
-
-        name = target.name or str(target.id)
-        print("FOLLOW: " + name)
-
-        user.add_to_following(target)
-
-        with open(SAVE_FILE, "wb") as fp:
-            pickle.dump(ids, fp)
-
-    count = 0
-    for follower in target.get_followers():
-        targets.append(follower)
-        count += 1
-        # prevent timeouts on people with too many followers (?)
-        if (count > 50):
-            break
-    count = 0
-    for following in target.get_following():
-        targets.append(follower)
-        count += 1
-        # prevent timeouts on people with too many following (?)
-        if (count > 50):
-            break
-
-def get_user():
-    if len(argv) > 2:
-        g = Github(argv[1], argv[2])
+def _get_creds(conf):
+    """Get credentials from a file or stdin.
+    """
+    if conf and os.path.isfile(conf):
+        config = configparser.ConfigParser()
+        config.read(conf)
+        usr, pwd = config['login']['username'], config['login']['password']
     else:
-        g = Github(input("Username: "), getpass("Password: "))
-    return g.get_user(), g.get_rate_limit().rate.remaining
+        usr, pwd = input("Username: "), getpass("Password: ")
+    return usr, pwd
 
 
-if __name__ == "__main__":
-    user, limit = get_user()
-    print("{} remaining requests for the hour."
-            .format(limit))
+def login(conf=None):
+    """Authenticate with Github using their API (for a higher rate limit).
+    """
+    g = Github(*_get_creds(conf))
+    limit = g.get_rate_limit().rate.remaining
+    return g.get_user(), limit
 
-    targets = list(user.get_following())
 
-    ids = set()
-    traversed = { user.id }
+def _depaginate(pagable):
+    """This extension of the Github API hides pagination handling for a
+    pagable object.
+    This function returns a generator that is per-page lazy.
+    """
+    results = []
+    page = 0
+    buf = None
 
+    # the github api is weird
+    while buf == None or len(buf) > 0:
+        buf = pagable.get_page(page)
+        page += 1
+        for e in buf:
+            yield e
+
+
+def traverse_repos(root, cb, skip=False):
+    """Traverse repositories of github using the Github API.
+    Runs cb on each user's repositories.
+    If skip is True, then that user's repositories are not processed.
+    """
+    # convert the repo callback to a user callback
+    def _user_cb(user):
+        for repo in _depaginate(user.get_repos()):
+            cb(user, repo)
+
+    traverse_users(root, _user_cb, skip)
+
+
+def traverse_users(root, cb, skip, visited=set()):
+    """Traverse Github users breadth-first using the Github API.
+    Runs cb on each user.
+    If skip is True, then that user's repositories are not processed.
+    """
+    # avoid cycles
+    visited.add(root.login)
+
+    if not skip:
+        cb(root)
+
+    for user in _depaginate(root.get_following()):
+        if not user.login in visited:
+            traverse_users(user, cb, False)
+
+
+def apply_diff(filename, diff):
+    """Apply a diff to a file.
+    """
+    # TODO
+    with open(filename, 'w') as fp:
+        fp.write(diff)
+
+
+def clone(repo, path):
+    """Clone a given repository object to the specified path.
+    """
     try:
-        with open(SAVE_FILE, "rb") as fp:
-            ids = pickle.load(fp)
-        ids.add(user.id)
-
-        count = 0
-
-        # TODO: have guarantees so this isn't needed
-        for following in targets:
-            ids.add(following.id)
-            count += 1
-            targets.append(following)
-            if (count > 40):
-                break
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
     finally:
-        with open(SAVE_FILE, "wb") as fp:
-            pickle.dump(ids, fp)
+        logging.debug("cloning {}".format(repo.clone_url))
+        repo_local = Repo.clone_from(repo.clone_url, path)
 
-    print("done saving old followed users")
 
-    while len(targets) > 0: # basically never stop
-        try:
-            search(targets)
-        except:
-            pass
-    print("exhausted search (???)")
+def commit_and_pr(local, remote,
+                  username, documents,
+                  cmsg="auto", cargs={}):
+    local.index.add(documents)
+    local.index.commit(cmsg)
+
+    local.remote('origin').push()
+
+    args_pr = {'title': "automatic PR",
+               'body': "automatically generated pull request",
+               'head': "{}:master".format(username),
+               'base': "master"}
+    args_pr.update(cargs)
+
+    logging.debug("making PR")
+    remote.create_pull(**args_pr)
+
+
+def auto_pr(user, repo_remote, work_path, updater, cmsg="auto", cargs={}):
+    """Clone a repository, check for changes to be made, then fork and make a
+    PR if needed.
+    Runs updater on repository path, expecting a list of file diffs.
+    """
+    # clone original repository
+    clone(repo_remote, work_path)
+
+    # determine changes
+    file_changes = updater(work_path)
+
+    # fork repo if diffs generated
+    if file_changes:
+        repo_fork = user.create_fork(repo_remote)
+
+        # clone forked repository
+        clone(repo_fork, work_path)
+
+        for name, diff in file_changes.items():
+            # apply changes to file
+            apply_diff(filename, diff)
+
+        # commit and PR
+        if repo_fork.index.diff(None): # TODO: retest the need for this
+            commit_and_pr(repo_fork, repo_remote,
+                          user.login, list(file_changes.keys()),
+                          cmsg, cargs)
+            # clean up
+            repo_fork.delete()

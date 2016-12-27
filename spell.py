@@ -112,3 +112,11 @@ def correct(doc):
         parts[i] = part
 
     return ''.join(parts)
+
+
+def spellcheck(filename):
+    with open(filename, 'rb') as fp:
+        doc = fp.read().decode(errors='ignore')
+
+    logging.debug("spell-checking file{}".format(filename))
+    return spell.correct(doc)
